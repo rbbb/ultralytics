@@ -25,8 +25,19 @@ from tqdm import tqdm as tqdm_original
 from ultralytics import __version__
 
 # PyTorch Multi-GPU DDP Constants
-RANK = int(os.getenv('RANK', -1))
-LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html
+
+# implementing XLA would require to go through all the code, and replace RANK in (-1,0) with a 
+# function call (is_main_process or something)
+# Since it's doable, but a bit heavy for proof of concept code, this is hacked by switching on the 'YOLO_XLA'
+# environment variable instead
+
+if 'YOLO_XLA' in os.environ:
+    import torch_xla, torch_xla.core.xla_model
+    RANK = torch_xla.core.xla_model.get_ordinal()
+    LOCAL_RANK = torch_xla.core.xla_model.get_local_ordinal()
+else:
+    RANK = int(os.getenv('RANK', -1))
+    LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html
 
 # Other Constants
 FILE = Path(__file__).resolve()

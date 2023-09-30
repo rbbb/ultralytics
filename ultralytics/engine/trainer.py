@@ -80,6 +80,7 @@ class BaseTrainer:
             cfg (str, optional): Path to a configuration file. Defaults to DEFAULT_CFG.
             overrides (dict, optional): Configuration overrides. Defaults to None.
         """
+        self.xla_save_args = (cfg, overrides)
         self.args = get_cfg(cfg, overrides)
         self.check_resume(overrides)
         self.device = select_device(self.args.device, self.args.batch)
@@ -161,7 +162,10 @@ class BaseTrainer:
 
     def train(self):
         """Allow device='', device=None on Multi-GPU systems to default to device=0."""
-        if isinstance(self.args.device, str) and len(self.args.device):  # i.e. device='0' or device='0,1,2,3'
+        if self.args.device.startswith("xla"):
+            import torch_xla
+            world_size = torch_xla.core.xla_model.xrt_world_size()
+        elif isinstance(self.args.device, str) and len(self.args.device):  # i.e. device='0' or device='0,1,2,3'
             world_size = len(self.args.device.split(','))
         elif isinstance(self.args.device, (tuple, list)):  # i.e. device=[0, 1, 2, 3] (multi-GPU from CLI is list)
             world_size = len(self.args.device)
@@ -171,6 +175,10 @@ class BaseTrainer:
             world_size = 0
 
         # Run subprocess if DDP training, else train normally
+        if self.args.device.startswith("xla"):
+            # maybe disable rect and auto-batch as well (TPUs like batch sizes multiples of 8 and 128)
+            import torch_xla.distributed.xla_multiprocessing as xmp
+            xmp.spawn(BaseTrainer._xla_do_train, args=(type(self).__module__,type(self).__qualname__, self.xla_save_args[0], self.xla_save_args[1], world_size))
         if world_size > 1 and 'LOCAL_RANK' not in os.environ:
             # Argument checks
             if self.args.rect:
@@ -193,6 +201,12 @@ class BaseTrainer:
 
         else:
             self._do_train(world_size)
+            
+    @staticmethod
+    def _xla_do_train(cls, module_name, class_name, cfg, overrides, world_size):
+        import importlib
+        module = importlib.import_module(module_name)
+        getattr(module, class_name)(cfg=cfg, overrides=overrides)._do_train(world_size)
 
     def _setup_ddp(self, world_size):
         """Initializes and sets the DistributedDataParallel parameters for training."""
@@ -233,17 +247,18 @@ class BaseTrainer:
                 v.requires_grad = True
 
         # Check AMP
-        self.amp = torch.tensor(self.args.amp).to(self.device)  # True or False
-        if self.amp and RANK in (-1, 0):  # Single-GPU and DDP
-            callbacks_backup = callbacks.default_callbacks.copy()  # backup callbacks as check_amp() resets them
-            self.amp = torch.tensor(check_amp(self.model), device=self.device)
-            callbacks.default_callbacks = callbacks_backup  # restore callbacks
-        if RANK > -1 and world_size > 1:  # DDP
-            dist.broadcast(self.amp, src=0)  # broadcast the tensor from rank 0 to all other ranks (returns None)
-        self.amp = bool(self.amp)  # as boolean
-        self.scaler = amp.GradScaler(enabled=self.amp)
-        if world_size > 1:
-            self.model = DDP(self.model, device_ids=[RANK])
+        if not self.args.device.startswith("xla"):
+            self.amp = torch.tensor(self.args.amp).to(self.device)  # True or False
+            if self.amp and RANK in (-1, 0):  # Single-GPU and DDP
+                callbacks_backup = callbacks.default_callbacks.copy()  # backup callbacks as check_amp() resets them
+                self.amp = torch.tensor(check_amp(self.model), device=self.device)
+                callbacks.default_callbacks = callbacks_backup  # restore callbacks
+            if RANK > -1 and world_size > 1:  # DDP
+                dist.broadcast(self.amp, src=0)  # broadcast the tensor from rank 0 to all other ranks (returns None)
+            self.amp = bool(self.amp)  # as boolean
+            self.scaler = amp.GradScaler(enabled=self.amp)
+            if world_size > 1:
+                self.model = DDP(self.model, device_ids=[RANK])
 
         # Check imgsz
         gs = max(int(self.model.stride.max() if hasattr(self.model, 'stride') else 32), 32)  # grid size (max stride)
@@ -343,20 +358,32 @@ class BaseTrainer:
                             x['momentum'] = np.interp(ni, xi, [self.args.warmup_momentum, self.args.momentum])
 
                 # Forward
-                with torch.cuda.amp.autocast(self.amp):
+                if self.args.device.startswith("xla"): #custom 'enter' ?
                     batch = self.preprocess_batch(batch)
                     self.loss, self.loss_items = self.model(batch)
                     if RANK != -1:
                         self.loss *= world_size
                     self.tloss = (self.tloss * i + self.loss_items) / (i + 1) if self.tloss is not None \
                         else self.loss_items
+                else:
+                    with torch.cuda.amp.autocast(self.amp):
+                        batch = self.preprocess_batch(batch)
+                        self.loss, self.loss_items = self.model(batch)
+                        if RANK != -1:
+                            self.loss *= world_size
+                        self.tloss = (self.tloss * i + self.loss_items) / (i + 1) if self.tloss is not None \
+                            else self.loss_items
 
                 # Backward
                 self.scaler.scale(self.loss).backward()
 
                 # Optimize - https://pytorch.org/docs/master/notes/amp_examples.html
                 if ni - last_opt_step >= self.accumulate:
-                    self.optimizer_step()
+                    if self.args.device.startswith("xla"):
+                        import torch_xla.core.xla_model as xm
+                        xm.optimizer_step(optimizer)
+                    else:
+                        self.optimizer_step()
                     last_opt_step = ni
 
                 # Log

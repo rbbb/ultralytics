@@ -105,8 +105,11 @@ def select_device(device='', batch=0, newline=False, verbose=True):
         device = device.replace(remove, '')  # to string, 'cuda:0' -> '0' and '(0, 1)' -> '0,1'
     cpu = device == 'cpu'
     mps = device in ('mps', 'mps:0')  # Apple Metal Performance Shaders (MPS)
+    xla = device.startswith("xla")
     if cpu or mps:
         os.environ['CUDA_VISIBLE_DEVICES'] = '-1'  # force torch.cuda.is_available() = False
+    elif xla:
+        pass
     elif device:  # non-cpu device requested
         if device == 'cuda':
             device = '0'
@@ -123,8 +126,12 @@ def select_device(device='', batch=0, newline=False, verbose=True):
                              f'\ntorch.cuda.device_count(): {torch.cuda.device_count()}'
                              f"\nos.environ['CUDA_VISIBLE_DEVICES']: {visible}\n"
                              f'{install}')
-
-    if not cpu and not mps and torch.cuda.is_available():  # prefer GPU if available
+                             
+    if xla:
+        import torch_xla
+        import torch_xla.core.xla_model as xm
+        return xm.xla_device()
+    elif not cpu and not mps and torch.cuda.is_available():  # prefer GPU if available
         devices = device.split(',') if device else '0'  # range(torch.cuda.device_count())  # i.e. 0,1,6,7
         n = len(devices)  # device count
         if n > 1 and batch > 0 and batch % n != 0:  # check batch_size is divisible by device_count
