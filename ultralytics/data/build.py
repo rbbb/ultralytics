@@ -61,6 +61,10 @@ class _RepeatSampler:
         while True:
             yield from iter(self.sampler)
 
+    def __len__(self):
+        """Returns the length of the batch sampler's sampler."""
+        return len(self.sampler)
+
 
 def seed_worker(worker_id):  # noqa
     """Set dataloader worker seed https://pytorch.org/docs/stable/notes/randomness.html#dataloader."""
@@ -93,12 +97,12 @@ def build_yolo_dataset(cfg, img_path, batch, data, mode='train', rect=False, str
 def build_dataloader(dataset, batch, workers, shuffle=True, rank=-1):
     """Return an InfiniteDataLoader or DataLoader for training or validation set."""
     batch = min(batch, len(dataset))
-    nd = torch.cuda.device_count()  # number of CUDA devices
+    nd = 8  # torch.cuda.device_count()  # number of CUDA devices
     nw = min([os.cpu_count() // max(nd, 1), batch if batch > 1 else 0, workers])  # number of workers
-    sampler = None if rank == -1 else distributed.DistributedSampler(dataset, shuffle=shuffle)
+    sampler = None if rank==-1 else torch.utils.data.BatchSampler(distributed.DistributedSampler(dataset, shuffle=shuffle), 8, drop_last=True)
     generator = torch.Generator()
     generator.manual_seed(6148914691236517205 + RANK)
-    return InfiniteDataLoader(dataset=dataset,
+    return dataloader.DataLoader(dataset=dataset,
                               batch_size=batch,
                               shuffle=shuffle and sampler is None,
                               num_workers=nw,
