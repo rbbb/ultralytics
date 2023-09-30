@@ -35,6 +35,11 @@ if 'YOLO_XLA' in os.environ:
     import torch_xla, torch_xla.core.xla_model
     RANK = torch_xla.core.xla_model.get_ordinal()
     LOCAL_RANK = torch_xla.core.xla_model.get_local_ordinal()
+    #os.environ['RANK'] = str(RANK)
+    #os.environ['LOCAL_RANK'] = str(LOCAL_RANK)
+    #os.environ['WORLD_SIZE'] = str(torch_xla.core.xla_model.xrt_world_size())
+    #os.environ['MASTER_ADDR'] = str("127.0.0.1")
+    #os.environ['MASTER_PORT'] = str("7861")
 else:
     RANK = int(os.getenv('RANK', -1))
     LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html

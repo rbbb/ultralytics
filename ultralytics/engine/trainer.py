@@ -204,6 +204,9 @@ class BaseTrainer:
             
     @staticmethod
     def _xla_do_train(cls, module_name, class_name, cfg, overrides, world_size):
+        import torch.distributed as dist
+        import torch_xla.experimental.pjrt_backend
+        dist.init_process_group("xla", init_method="pjrt://") #dp for windows
         import importlib
         module = importlib.import_module(module_name)
         getattr(module, class_name)(cfg=cfg, overrides=overrides)._do_train(world_size)
@@ -247,7 +250,11 @@ class BaseTrainer:
                 v.requires_grad = True
 
         # Check AMP
-        if not self.args.device.startswith("xla"):
+        if self.args.device.startswith("xla"):
+            class NoScaler:
+                def scale(self, x): return x
+            self.scaler = NoScaler()
+        else:
             self.amp = torch.tensor(self.args.amp).to(self.device)  # True or False
             if self.amp and RANK in (-1, 0):  # Single-GPU and DDP
                 callbacks_backup = callbacks.default_callbacks.copy()  # backup callbacks as check_amp() resets them
@@ -381,7 +388,7 @@ class BaseTrainer:
                 if ni - last_opt_step >= self.accumulate:
                     if self.args.device.startswith("xla"):
                         import torch_xla.core.xla_model as xm
-                        xm.optimizer_step(optimizer)
+                        xm.optimizer_step(self.optimizer)
                     else:
                         self.optimizer_step()
                     last_opt_step = ni
