@@ -132,7 +132,6 @@ def select_device(device='', batch=0, newline=False, verbose=True):
                              f'{install}')
                              
     if xla:
-        import torch_xla
         import torch_xla.core.xla_model as xm
         return xm.xla_device()
     elif not cpu and not mps and torch.cuda.is_available():  # prefer GPU if available

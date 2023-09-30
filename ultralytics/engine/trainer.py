@@ -83,7 +83,7 @@ class BaseTrainer:
         self.xla_save_args = (cfg, overrides)
         self.args = get_cfg(cfg, overrides)
         self.check_resume(overrides)
-        self.device = select_device(self.args.device, self.args.batch)
+        
         self.validator = None
         self.model = None
         self.metrics = None
@@ -107,7 +107,7 @@ class BaseTrainer:
             print_args(vars(self.args))
 
         # Device
-        if self.device.type in ('cpu', 'mps'):
+        if self.args.device in ('cpu', 'mps'):
             self.args.workers = 0  # faster CPU training as time dominated by inference, not dataloading
 
         # Model and Dataset
@@ -310,6 +310,7 @@ class BaseTrainer:
 
     def _do_train(self, world_size=1):
         """Train completed, evaluate and plot if specified by arguments."""
+        self.device = select_device(self.args.device, self.args.batch)
         if world_size > 1:
             self._setup_ddp(world_size)
         self._setup_train(world_size)
