@@ -159,6 +159,9 @@ class BaseTrainer:
         """Run all existing callbacks associated with a particular event."""
         for callback in self.callbacks.get(event, []):
             callback(self)
+            
+    def _do_xla_ddp(self, world_size):
+        raise NotImplementedError
 
     def train(self):
         """Allow device='', device=None on Multi-GPU systems to default to device=0."""
@@ -176,10 +179,8 @@ class BaseTrainer:
 
         # Run subprocess if DDP training, else train normally
         if self.args.device.startswith("xla"):
-            # maybe disable rect and auto-batch as well (TPUs like batch sizes multiples of 8 and 128)
-            import torch_xla.distributed.xla_multiprocessing as xmp
-            xmp.spawn(BaseTrainer._xla_do_train, args=(type(self).__module__,type(self).__qualname__, self.xla_save_args[0], self.xla_save_args[1], world_size))
-        if world_size > 1 and 'LOCAL_RANK' not in os.environ:
+            self._do_xla_ddp(world_size)
+        elif world_size > 1 and 'LOCAL_RANK' not in os.environ:
             # Argument checks
             if self.args.rect:
                 LOGGER.warning("WARNING ⚠️ 'rect=True' is incompatible with Multi-GPU training, setting 'rect=False'")

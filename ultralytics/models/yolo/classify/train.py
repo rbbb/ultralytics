@@ -11,6 +11,12 @@ from ultralytics.utils import DEFAULT_CFG, LOGGER, RANK, colorstr
 from ultralytics.utils.plotting import plot_images, plot_results
 from ultralytics.utils.torch_utils import is_parallel, strip_optimizer, torch_distributed_zero_first
 
+def spawn_train(sth, cfg, overrides, world_size):
+    print("STH", sth)
+    import torch.distributed as dist
+    import torch_xla.experimental.pjrt_backend
+    dist.init_process_group("xla", init_method="pjrt://")
+    ClassificationTrainer(cfg=cfg, overrides=overrides)._do_train(world_size)
 
 class ClassificationTrainer(BaseTrainer):
     """
@@ -56,6 +62,10 @@ class ClassificationTrainer(BaseTrainer):
         for p in model.parameters():
             p.requires_grad = True  # for training
         return model
+        
+    def _do_xla_ddp(self, world_size):
+        import torch_xla.distributed.xla_multiprocessing as xmp
+        xmp.spawn(spawn_train, args=(self.xla_save_args[0], self.xla_save_args[1], world_size))
 
     def setup_model(self):
         """Load, create or download model for any task."""
@@ -148,3 +158,4 @@ class ClassificationTrainer(BaseTrainer):
             cls=batch['cls'].view(-1),  # warning: use .view(), not .squeeze() for Classify models
             fname=self.save_dir / f'train_batch{ni}.jpg',
             on_plot=self.on_plot)
+
